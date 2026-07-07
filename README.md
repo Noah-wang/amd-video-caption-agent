@@ -82,6 +82,16 @@ docker run --rm \
   amd-video-caption-agent:test
 ```
 
+## Local Benchmark
+
+Run the public sample clips through the container and validate the output shape,
+style coverage, obvious reasoning leaks, and simple tone heuristics:
+
+```bash
+export THEBESTAI_API_KEY="your-key"
+python scripts/local_benchmark.py --image amd-video-caption-agent:test
+```
+
 ## Submission Build
 
 The judging VM uses `linux/amd64`. On Apple Silicon, build and push with:
