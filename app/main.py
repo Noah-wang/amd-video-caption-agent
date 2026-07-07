@@ -11,6 +11,14 @@ from pathlib import Path
 from openai import OpenAI
 
 
+FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1"
+FIREWORKS_VISION_MODEL = "accounts/fireworks/models/qwen2p5-vl-32b-instruct"
+FIREWORKS_TEXT_MODEL = "accounts/fireworks/models/qwen2p5-32b-instruct"
+THEBESTAI_BASE_URL = "https://thebestai.net/v1"
+THEBESTAI_VISION_MODEL = "glm-4v-plus"
+THEBESTAI_TEXT_MODEL = "deepseek-v4-flash-none"
+
+
 def resolve_input_path() -> Path:
     docker_input = Path("/input/tasks.json")
     local_input = Path("input/tasks.json")
@@ -88,18 +96,54 @@ def extract_frames(video_path: Path, frame_count: int = 4) -> list[Path]:
     return frame_paths
 
 
+def get_provider() -> str:
+    requested_provider = os.getenv("AI_PROVIDER", "").strip().lower()
+    if requested_provider:
+        return requested_provider
+    if os.getenv("FIREWORKS_API_KEY"):
+        return "fireworks"
+    if os.getenv("THEBESTAI_API_KEY"):
+        return "thebestai"
+    return "fireworks"
+
+
 def create_ai_client() -> OpenAI:
-    api_key = os.getenv("THEBESTAI_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "THEBESTAI_API_KEY is not set. Export it before running the program."
-        )
+    provider = get_provider()
+    if provider == "fireworks":
+        api_key = os.getenv("FIREWORKS_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "FIREWORKS_API_KEY is not set. Export it before running the program."
+            )
+        base_url = os.getenv("FIREWORKS_BASE_URL", FIREWORKS_BASE_URL)
+    elif provider == "thebestai":
+        api_key = os.getenv("THEBESTAI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "THEBESTAI_API_KEY is not set. Export it before running the program."
+            )
+        base_url = os.getenv("THEBESTAI_BASE_URL", THEBESTAI_BASE_URL)
+    else:
+        raise RuntimeError(f"Unsupported AI_PROVIDER: {provider}")
 
     return OpenAI(
         api_key=api_key,
-        base_url="https://thebestai.net/v1",
+        base_url=base_url,
         timeout=60,
     )
+
+
+def get_model(kind: str) -> str:
+    provider = get_provider()
+    if provider == "fireworks":
+        if kind == "vision":
+            return os.getenv("FIREWORKS_VISION_MODEL", FIREWORKS_VISION_MODEL)
+        return os.getenv("FIREWORKS_TEXT_MODEL", FIREWORKS_TEXT_MODEL)
+    if provider == "thebestai":
+        if kind == "vision":
+            return os.getenv("THEBESTAI_VISION_MODEL", THEBESTAI_VISION_MODEL)
+        return os.getenv("THEBESTAI_TEXT_MODEL", THEBESTAI_TEXT_MODEL)
+    raise RuntimeError(f"Unsupported AI_PROVIDER: {provider}")
 
 
 def encode_image_base64(image_path: Path) -> str:
@@ -108,7 +152,7 @@ def encode_image_base64(image_path: Path) -> str:
 
 def describe_video_frames(frame_paths: list[Path]) -> str:
     client = create_ai_client()
-    model = os.getenv("THEBESTAI_VISION_MODEL", "glm-4v-plus")
+    model = get_model("vision")
 
     content = [
         {
@@ -177,7 +221,7 @@ def fallback_caption(style: str, visual_summary: str) -> str:
 
 def rewrite_captions(styles: list[str], visual_summary: str) -> dict[str, str]:
     client = create_ai_client()
-    model = os.getenv("THEBESTAI_TEXT_MODEL", "deepseek-v4-flash-none")
+    model = get_model("text")
 
     style_instructions = {
         "formal": "Use a professional, objective, factual tone.",

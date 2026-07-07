@@ -85,7 +85,13 @@ def run_container(image: str, input_dir: Path, output_dir: Path, timeout: int) -
     output_dir.mkdir(parents=True, exist_ok=True)
     env_args = []
     for name in [
+        "AI_PROVIDER",
+        "FIREWORKS_API_KEY",
+        "FIREWORKS_BASE_URL",
+        "FIREWORKS_VISION_MODEL",
+        "FIREWORKS_TEXT_MODEL",
         "THEBESTAI_API_KEY",
+        "THEBESTAI_BASE_URL",
         "THEBESTAI_VISION_MODEL",
         "THEBESTAI_TEXT_MODEL",
     ]:
@@ -191,8 +197,10 @@ def main() -> None:
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
 
-    if not os.getenv("THEBESTAI_API_KEY"):
-        raise RuntimeError("Set THEBESTAI_API_KEY before running the benchmark.")
+    if not (os.getenv("FIREWORKS_API_KEY") or os.getenv("THEBESTAI_API_KEY")):
+        raise RuntimeError(
+            "Set FIREWORKS_API_KEY or THEBESTAI_API_KEY before running the benchmark."
+        )
 
     temp_root = Path(tempfile.mkdtemp(prefix="caption_benchmark_"))
     input_dir = temp_root / "input"

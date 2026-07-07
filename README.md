@@ -11,8 +11,8 @@ the requested caption styles.
 2. Download each `video_url`.
 3. Sample 4 evenly spaced frames with `ffmpeg`.
 4. Resize frames to 768px wide to reduce image-token cost.
-5. Use `glm-4v-plus` through the OpenAI-compatible `thebestai` endpoint for visual summarization.
-6. Use `deepseek-v4-flash-none` to generate all requested styles in one JSON response.
+5. Use Fireworks `qwen2p5-vl-32b-instruct` for visual summarization.
+6. Use Fireworks `qwen2p5-32b-instruct` to generate all requested styles in one JSON response.
 7. Write `/output/results.json`.
 
 ## Input
@@ -48,14 +48,15 @@ the requested caption styles.
 Required:
 
 ```bash
-export THEBESTAI_API_KEY="your-key"
+export FIREWORKS_API_KEY="your-key"
 ```
 
 Optional:
 
 ```bash
-export THEBESTAI_VISION_MODEL="glm-4v-plus"
-export THEBESTAI_TEXT_MODEL="deepseek-v4-flash-none"
+export AI_PROVIDER="fireworks"
+export FIREWORKS_VISION_MODEL="accounts/fireworks/models/qwen2p5-vl-32b-instruct"
+export FIREWORKS_TEXT_MODEL="accounts/fireworks/models/qwen2p5-32b-instruct"
 ```
 
 ## Local Run
@@ -74,9 +75,10 @@ cat output/results.json
 docker build --platform linux/amd64 -t amd-video-caption-agent:test .
 docker run --rm \
   --platform linux/amd64 \
-  -e THEBESTAI_API_KEY="$THEBESTAI_API_KEY" \
-  -e THEBESTAI_VISION_MODEL="glm-4v-plus" \
-  -e THEBESTAI_TEXT_MODEL="deepseek-v4-flash-none" \
+  -e FIREWORKS_API_KEY="$FIREWORKS_API_KEY" \
+  -e AI_PROVIDER="fireworks" \
+  -e FIREWORKS_VISION_MODEL="accounts/fireworks/models/qwen2p5-vl-32b-instruct" \
+  -e FIREWORKS_TEXT_MODEL="accounts/fireworks/models/qwen2p5-32b-instruct" \
   -v "$(pwd)/input:/input" \
   -v "$(pwd)/output:/output" \
   amd-video-caption-agent:test
@@ -88,7 +90,7 @@ Run the public sample clips through the container and validate the output shape,
 style coverage, obvious reasoning leaks, and simple tone heuristics:
 
 ```bash
-export THEBESTAI_API_KEY="your-key"
+export FIREWORKS_API_KEY="your-key"
 python scripts/local_benchmark.py --image amd-video-caption-agent:test
 ```
 
