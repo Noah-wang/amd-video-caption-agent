@@ -954,10 +954,12 @@ def main() -> None:
 
     input_path = resolve_input_path()
     output_path = resolve_output_path()
+    debug_facts_path = os.getenv("DEBUG_FACTS_PATH")
 
     tasks = json.loads(input_path.read_text())
 
     results = []
+    debug_facts = []
     for task in tasks:
         video_path = download_video(task["video_url"])
         try:
@@ -985,9 +987,20 @@ def main() -> None:
                 "captions": captions,
             }
         )
+        debug_facts.append(
+            {
+                "task_id": task["task_id"],
+                "visual_facts": visual_facts,
+            }
+        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
+    if debug_facts_path:
+        Path(debug_facts_path).write_text(
+            json.dumps(debug_facts, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
 
 if __name__ == "__main__":

@@ -124,6 +124,7 @@ def run_container(image: str, input_dir: Path, output_dir: Path, timeout: int) -
         "MAX_CANDIDATE_FRAMES",
         "MAX_VISION_FRAMES",
         "CAPTION_SELF_REVIEW",
+        "DEBUG_FACTS_PATH",
     ]:
         value = os.getenv(name)
         if value:

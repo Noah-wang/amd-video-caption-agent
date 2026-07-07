@@ -120,6 +120,44 @@ export FIREWORKS_API_KEY="your-key"
 python scripts/local_benchmark.py --image amd-video-caption-agent:test
 ```
 
+## Scoring Tools
+
+Judge an existing run with fast heuristics:
+
+```bash
+python scripts/judge_outputs.py \
+  --input input/tasks.json \
+  --results output/results.json \
+  --heuristic-only
+```
+
+For closer LLM-judge style scoring, run the container with `DEBUG_FACTS_PATH`
+and pass the visual facts sidecar into the judge:
+
+```bash
+docker run --rm \
+  --platform linux/amd64 \
+  -e FIREWORKS_API_KEY="$FIREWORKS_API_KEY" \
+  -e DEBUG_FACTS_PATH="/output/debug_facts.json" \
+  -v "$(pwd)/input:/input" \
+  -v "$(pwd)/output:/output" \
+  amd-video-caption-agent:test
+
+python scripts/judge_outputs.py \
+  --input input/tasks.json \
+  --results output/results.json \
+  --facts output/debug_facts.json
+```
+
+Sweep a few pipeline configurations and rank them by score and runtime:
+
+```bash
+python scripts/sweep_configs.py \
+  --image amd-video-caption-agent:test \
+  --limit 2 \
+  --heuristic-only
+```
+
 ## Submission Build
 
 The judging VM uses `linux/amd64`. On Apple Silicon, build and push with:
