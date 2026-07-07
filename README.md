@@ -11,8 +11,8 @@ the requested caption styles.
 2. Download each `video_url`.
 3. Sample 4 evenly spaced frames with `ffmpeg`.
 4. Resize frames to 768px wide to reduce image-token cost.
-5. Use Fireworks `qwen2p5-vl-32b-instruct` for visual summarization.
-6. Use Fireworks `qwen2p5-32b-instruct` to generate all requested styles in one JSON response.
+5. Use Fireworks `minimax-m3` for visual summarization.
+6. Use Fireworks `gpt-oss-120b` to generate all requested styles in one JSON response.
 7. Write `/output/results.json`.
 
 ## Input
@@ -55,8 +55,8 @@ Optional:
 
 ```bash
 export AI_PROVIDER="fireworks"
-export FIREWORKS_VISION_MODEL="accounts/fireworks/models/qwen2p5-vl-32b-instruct"
-export FIREWORKS_TEXT_MODEL="accounts/fireworks/models/qwen2p5-32b-instruct"
+export FIREWORKS_VISION_MODEL="accounts/fireworks/models/minimax-m3"
+export FIREWORKS_TEXT_MODEL="accounts/fireworks/models/gpt-oss-120b"
 ```
 
 ## Local Run
@@ -77,8 +77,8 @@ docker run --rm \
   --platform linux/amd64 \
   -e FIREWORKS_API_KEY="$FIREWORKS_API_KEY" \
   -e AI_PROVIDER="fireworks" \
-  -e FIREWORKS_VISION_MODEL="accounts/fireworks/models/qwen2p5-vl-32b-instruct" \
-  -e FIREWORKS_TEXT_MODEL="accounts/fireworks/models/qwen2p5-32b-instruct" \
+  -e FIREWORKS_VISION_MODEL="accounts/fireworks/models/minimax-m3" \
+  -e FIREWORKS_TEXT_MODEL="accounts/fireworks/models/gpt-oss-120b" \
   -v "$(pwd)/input:/input" \
   -v "$(pwd)/output:/output" \
   amd-video-caption-agent:test

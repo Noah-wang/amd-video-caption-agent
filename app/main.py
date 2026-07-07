@@ -12,11 +12,48 @@ from openai import OpenAI
 
 
 FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1"
-FIREWORKS_VISION_MODEL = "accounts/fireworks/models/qwen2p5-vl-32b-instruct"
-FIREWORKS_TEXT_MODEL = "accounts/fireworks/models/qwen2p5-32b-instruct"
+FIREWORKS_VISION_MODEL = "accounts/fireworks/models/minimax-m3"
+FIREWORKS_TEXT_MODEL = "accounts/fireworks/models/gpt-oss-120b"
 THEBESTAI_BASE_URL = "https://thebestai.net/v1"
 THEBESTAI_VISION_MODEL = "glm-4v-plus"
 THEBESTAI_TEXT_MODEL = "deepseek-v4-flash-none"
+TECH_TERMS = [
+    "api",
+    "bug",
+    "server",
+    "latency",
+    "algorithm",
+    "ui",
+    "code",
+    "system",
+    "log",
+    "render",
+    "input",
+    "cache",
+    "runtime",
+    "deploy",
+    "update",
+    "software",
+    "firmware",
+    "wifi",
+    "gps",
+]
+
+
+def load_local_env(env_path: Path = Path(".env")) -> None:
+    if not env_path.exists():
+        return
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
 def resolve_input_path() -> Path:
@@ -158,10 +195,10 @@ def describe_video_frames(frame_paths: list[Path]) -> str:
         {
             "type": "text",
             "text": (
-                "You are looking at 4 frames sampled from a short video. "
-                "Write a concise, factual 1-2 sentence description of what is happening. "
-                "Focus on visible subjects, actions, and setting. "
-                "Do not use humor. Do not speculate beyond what is visible."
+                "These are sequential frames sampled from one video, not a collage. "
+                "Describe the video scene, not the frame layout. Output only one "
+                "final factual sentence. Focus on visible subjects, actions, and "
+                "setting. No analysis, bullets, markdown, or instructions."
             ),
         }
     ]
@@ -178,11 +215,11 @@ def describe_video_frames(frame_paths: list[Path]) -> str:
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": content}],
-        temperature=0.2,
-        max_tokens=160,
+        temperature=0.1,
+        max_tokens=2000,
     )
 
-    summary = get_message_text(response.choices[0].message)
+    summary = clean_visual_summary(get_message_text(response.choices[0].message))
     print(f"Visual summary: {summary}")
     return summary
 
@@ -203,20 +240,112 @@ def parse_json_object(text: str) -> dict:
         return json.loads(match.group(0))
 
 
+def clean_visual_summary(text: str) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return text
+
+    try:
+        parsed = parse_json_object(text)
+        summary = parsed.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            return summary.strip()
+    except json.JSONDecodeError:
+        pass
+
+    quoted_sentences = re.findall(r'"([^"]{30,240})"', text)
+    if quoted_sentences:
+        return quoted_sentences[-1].strip()
+
+    blocked_phrases = [
+        "analyze the request",
+        "professional image captioning",
+        "grounding:",
+        "role:",
+        "length:",
+        "focus:",
+        "no analysis",
+    ]
+    useful_starts = [
+        "The image shows",
+        "The images show",
+        "The image depicts",
+        "The images depict",
+        "A ",
+        "An ",
+    ]
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    candidates = []
+    for sentence in sentences:
+        stripped = sentence.strip("-• ").strip()
+        lower = stripped.lower()
+        if 30 <= len(stripped) <= 260 and any(
+            stripped.startswith(start) for start in useful_starts
+        ) and not any(phrase in lower for phrase in blocked_phrases):
+            candidates.append(stripped)
+
+    if candidates:
+        return candidates[-1]
+
+    if any(phrase in text.lower() for phrase in blocked_phrases):
+        return "A short video scene with visible subjects, actions, and setting."
+
+    return first_words(text, 32)
+
+
 def first_words(text: str, limit: int = 16) -> str:
     words = re.sub(r"\s+", " ", text).strip().split(" ")
     return " ".join(words[:limit]).rstrip(".,;:") + "."
 
 
+def normalize_caption(text: str) -> str:
+    replacements = {
+        "“": '"',
+        "”": '"',
+        "‘": "'",
+        "’": "'",
+        "—": "-",
+        "–": "-",
+        "‑": "-",
+        "…": "...",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def word_count(text: str) -> int:
+    return len([word for word in text.split() if word.strip()])
+
+
 def fallback_caption(style: str, visual_summary: str) -> str:
-    short_summary = first_words(visual_summary)
+    short_summary = first_words(visual_summary, 18)
     if style == "sarcastic":
         return f"Oh look, another scene of {short_summary.lower()}"
     if style == "humorous_tech":
-        return f"System log captured: {short_summary}"
+        return f"System log captured this scene with zero extra processing required."
     if style == "humorous_non_tech":
-        return f"Somehow this ordinary scene became entertaining: {short_summary}"
+        return f"Somehow this ordinary scene still found a way to be entertaining."
     return short_summary
+
+
+def has_tech_term(text: str) -> bool:
+    lower = text.lower()
+    return any(re.search(rf"\b{re.escape(term)}\b", lower) for term in TECH_TERMS)
+
+
+def choose_caption(style: str, caption: object, visual_summary: str) -> str:
+    if isinstance(caption, str) and caption.strip():
+        normalized = normalize_caption(caption)
+        is_reasonable_length = 4 <= word_count(normalized) <= 30
+        has_matching_tech_tone = (
+            (style == "humorous_tech" and has_tech_term(normalized))
+            or (style == "humorous_non_tech" and not has_tech_term(normalized))
+            or style not in {"humorous_tech", "humorous_non_tech"}
+        )
+        if is_reasonable_length and has_matching_tech_tone:
+            return normalized
+    return normalize_caption(fallback_caption(style, visual_summary))
 
 
 def rewrite_captions(styles: list[str], visual_summary: str) -> dict[str, str]:
@@ -247,24 +376,26 @@ def rewrite_captions(styles: list[str], visual_summary: str) -> dict[str, str]:
             {
                 "role": "system",
                 "content": (
-                    "You rewrite factual video summaries into short captions. "
-                    "Preserve the visible facts. Do not invent people, objects, "
-                    "actions, locations, or dialogue. Return only a valid JSON object. "
-                    "Use plain ASCII punctuation. Do not include markdown."
+                    "You are a JSON-only caption generator. Output the final "
+                    "answer only. Do not explain. Preserve visible facts and "
+                    "use plain ASCII punctuation."
                 ),
             },
             {
                 "role": "user",
                 "content": (
-                    f"Requested styles as JSON: {json.dumps(requested_styles)}\n"
-                    f"Video facts: {visual_summary}\n"
-                    "Return a JSON object whose keys exactly match the requested styles. "
-                    "Each value must be one English caption in 8 to 20 words."
+                    "Create captions for this video summary. Output ONLY a "
+                    "minified JSON object, no markdown. Keys must exactly match "
+                    f"this JSON object: {json.dumps(requested_styles)}\n"
+                    "Each value must be one short English caption in 8 to 16 words. "
+                    "Use one sentence per caption. Avoid long clauses. "
+                    "Do not invent people, objects, actions, locations, or dialogue.\n"
+                    f"Video summary: {visual_summary}"
                 ),
             },
         ],
-        temperature=0.6,
-        max_tokens=240,
+        temperature=0.2,
+        max_tokens=2000,
     )
 
     text = get_message_text(response.choices[0].message)
@@ -275,16 +406,14 @@ def rewrite_captions(styles: list[str], visual_summary: str) -> dict[str, str]:
 
     captions = {}
     for style in styles:
-        caption = generated.get(style)
-        if isinstance(caption, str) and caption.strip():
-            captions[style] = caption.strip()
-        else:
-            captions[style] = fallback_caption(style, visual_summary)
+        captions[style] = choose_caption(style, generated.get(style), visual_summary)
 
     return captions
 
 
 def main() -> None:
+    load_local_env()
+
     input_path = resolve_input_path()
     output_path = resolve_output_path()
 

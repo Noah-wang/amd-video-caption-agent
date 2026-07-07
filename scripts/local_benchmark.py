@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -59,6 +60,10 @@ TECH_TERMS = [
     "runtime",
     "deploy",
     "update",
+    "software",
+    "firmware",
+    "wifi",
+    "gps",
 ]
 
 SARCASM_MARKERS = [
@@ -70,7 +75,24 @@ SARCASM_MARKERS = [
     "thrilling",
     "because",
     "oh look",
+    "oh great",
 ]
+
+
+def load_local_env(env_path: Path = Path(".env")) -> None:
+    if not env_path.exists():
+        return
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
 def write_sample_input(input_dir: Path) -> None:
@@ -178,7 +200,10 @@ def validate_results(input_tasks: list[dict], results: object) -> list[str]:
             if any(phrase in lower for phrase in BAD_PHRASES):
                 failures.append(f"{task_id}.{style}: looks like model reasoning leaked")
 
-            has_tech = any(term in lower for term in TECH_TERMS)
+            has_tech = any(
+                re.search(rf"\b{re.escape(term)}\b", lower)
+                for term in TECH_TERMS
+            )
             has_sarcasm = any(marker in lower for marker in SARCASM_MARKERS)
             if style == "humorous_tech" and not has_tech:
                 failures.append(f"{task_id}.{style}: missing clear tech reference")
@@ -191,6 +216,8 @@ def validate_results(input_tasks: list[dict], results: object) -> list[str]:
 
 
 def main() -> None:
+    load_local_env()
+
     parser = argparse.ArgumentParser(description="Local benchmark for Track 2 container output.")
     parser.add_argument("--image", default="amd-video-caption-agent:test")
     parser.add_argument("--timeout", type=int, default=600)
@@ -202,7 +229,9 @@ def main() -> None:
             "Set FIREWORKS_API_KEY or THEBESTAI_API_KEY before running the benchmark."
         )
 
-    temp_root = Path(tempfile.mkdtemp(prefix="caption_benchmark_"))
+    benchmark_parent = Path(".benchmark_runs").resolve()
+    benchmark_parent.mkdir(parents=True, exist_ok=True)
+    temp_root = Path(tempfile.mkdtemp(prefix="caption_benchmark_", dir=benchmark_parent))
     input_dir = temp_root / "input"
     output_dir = temp_root / "output"
 

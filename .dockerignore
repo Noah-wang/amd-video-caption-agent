@@ -4,5 +4,6 @@ __pycache__
 .env
 samples/
 output/
+.benchmark_runs/
 .git
 .DS_Store
