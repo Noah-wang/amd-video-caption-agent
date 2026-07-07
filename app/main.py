@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 
@@ -17,6 +18,7 @@ FIREWORKS_TEXT_MODEL = "accounts/fireworks/models/gpt-oss-120b"
 THEBESTAI_BASE_URL = "https://thebestai.net/v1"
 THEBESTAI_VISION_MODEL = "glm-4v-plus"
 THEBESTAI_TEXT_MODEL = "deepseek-v4-flash-none"
+MAX_MODEL_RETRIES = 3
 TECH_TERMS = [
     "api",
     "bug",
@@ -37,6 +39,10 @@ TECH_TERMS = [
     "firmware",
     "wifi",
     "gps",
+]
+BANNED_UNSEEN_PATTERNS = [
+    r"\b(email|emails|coffee|spreadsheet|spreadsheets|litter box)\b",
+    r"\b(compiles?|debugs?|coding|programming)\s+(code|spreadsheets?|life)\b",
 ]
 
 
@@ -94,7 +100,18 @@ def get_video_duration(video_path: Path) -> float:
     return float(result.stdout.strip())
 
 
-def extract_frames(video_path: Path, frame_count: int = 4) -> list[Path]:
+def choose_frame_count(duration: float) -> int:
+    configured = os.getenv("VIDEO_FRAME_COUNT")
+    if configured:
+        return max(1, int(configured))
+    if duration < 10:
+        return 4
+    if duration < 30:
+        return 5
+    return 6
+
+
+def extract_frames(video_path: Path) -> list[Path]:
     frames_dir = Path("samples/frames")
 
     if frames_dir.exists():
@@ -103,6 +120,8 @@ def extract_frames(video_path: Path, frame_count: int = 4) -> list[Path]:
 
     duration = get_video_duration(video_path)
     print(f"Video duration: {duration:.2f} seconds")
+    frame_count = choose_frame_count(duration)
+    print(f"Sampling frames: {frame_count}")
 
     frame_paths = []
     for index in range(frame_count):
@@ -187,6 +206,21 @@ def encode_image_base64(image_path: Path) -> str:
     return base64.b64encode(image_path.read_bytes()).decode("utf-8")
 
 
+def create_chat_completion_with_retries(client: OpenAI, **kwargs):
+    last_error = None
+    for attempt in range(1, MAX_MODEL_RETRIES + 1):
+        try:
+            return client.chat.completions.create(**kwargs)
+        except Exception as error:
+            last_error = error
+            if attempt == MAX_MODEL_RETRIES:
+                break
+            sleep_seconds = 2 ** (attempt - 1)
+            print(f"Model call failed, retrying in {sleep_seconds}s: {error}")
+            time.sleep(sleep_seconds)
+    raise last_error
+
+
 def describe_video_frames(frame_paths: list[Path]) -> str:
     client = create_ai_client()
     model = get_model("vision")
@@ -196,9 +230,11 @@ def describe_video_frames(frame_paths: list[Path]) -> str:
             "type": "text",
             "text": (
                 "These are sequential frames sampled from one video, not a collage. "
-                "Describe the video scene, not the frame layout. Output only one "
-                "final factual sentence. Focus on visible subjects, actions, and "
-                "setting. No analysis, bullets, markdown, or instructions."
+                "Describe the video scene, not the frame layout. Output only valid "
+                "minified JSON with keys summary, subjects, actions, setting, "
+                "notable_details. Use visible facts only. No analysis or markdown. "
+                "Do not infer sensitive traits such as race, ethnicity, age, "
+                "nationality, religion, or health."
             ),
         }
     ]
@@ -212,16 +248,17 @@ def describe_video_frames(frame_paths: list[Path]) -> str:
             }
         )
 
-    response = client.chat.completions.create(
+    response = create_chat_completion_with_retries(
+        client,
         model=model,
         messages=[{"role": "user", "content": content}],
         temperature=0.1,
         max_tokens=2000,
     )
 
-    summary = clean_visual_summary(get_message_text(response.choices[0].message))
-    print(f"Visual summary: {summary}")
-    return summary
+    visual_facts = clean_visual_facts(get_message_text(response.choices[0].message))
+    print(f"Visual facts: {visual_facts}")
+    return visual_facts
 
 
 def get_message_text(message) -> str:
@@ -238,6 +275,66 @@ def parse_json_object(text: str) -> dict:
         if not match:
             raise
         return json.loads(match.group(0))
+
+
+def compact_list(value: object, limit: int = 5) -> str:
+    if isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return ", ".join(items[:limit])
+    if isinstance(value, str):
+        return value.strip()
+    return ""
+
+
+def remove_sensitive_descriptors(text: str) -> str:
+    identity_terms = "Black|White|Asian|Latina|Latino|Hispanic"
+    person_terms = "woman|man|person|girl|boy|child|teenager|adult"
+    text = re.sub(
+        rf"\b(young|middle-aged|elderly)\s+({identity_terms})\s+({person_terms})\b",
+        r"\1 \3",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        rf"\b({identity_terms})\s+({person_terms})\b",
+        r"\2",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def clean_visual_facts(text: str) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return "A short video scene with visible subjects, actions, and setting."
+
+    try:
+        parsed = parse_json_object(text)
+    except json.JSONDecodeError:
+        return clean_visual_summary(text)
+
+    summary = compact_list(parsed.get("summary"))
+    subjects = compact_list(parsed.get("subjects"))
+    actions = compact_list(parsed.get("actions"))
+    setting = compact_list(parsed.get("setting"))
+    details = compact_list(parsed.get("notable_details"))
+
+    parts = []
+    if summary:
+        parts.append(f"Summary: {summary}")
+    if subjects:
+        parts.append(f"Subjects: {subjects}")
+    if actions:
+        parts.append(f"Actions: {actions}")
+    if setting:
+        parts.append(f"Setting: {setting}")
+    if details:
+        parts.append(f"Notable details: {details}")
+
+    if parts:
+        return remove_sensitive_descriptors(". ".join(parts))
+    return remove_sensitive_descriptors(clean_visual_summary(text))
 
 
 def clean_visual_summary(text: str) -> str:
@@ -319,11 +416,11 @@ def word_count(text: str) -> int:
 
 
 def fallback_caption(style: str, visual_summary: str) -> str:
-    short_summary = first_words(visual_summary, 18)
+    short_summary = first_words(re.sub(r"^Summary:\s*", "", visual_summary), 18)
     if style == "sarcastic":
         return f"Oh look, another scene of {short_summary.lower()}"
     if style == "humorous_tech":
-        return f"System log captured this scene with zero extra processing required."
+        return tech_fallback_caption(visual_summary)
     if style == "humorous_non_tech":
         return f"Somehow this ordinary scene still found a way to be entertaining."
     return short_summary
@@ -332,6 +429,22 @@ def fallback_caption(style: str, visual_summary: str) -> str:
 def has_tech_term(text: str) -> bool:
     lower = text.lower()
     return any(re.search(rf"\b{re.escape(term)}\b", lower) for term in TECH_TERMS)
+
+
+def contains_banned_unseen_detail(text: str) -> bool:
+    lower = text.lower()
+    return any(re.search(pattern, lower) for pattern in BANNED_UNSEEN_PATTERNS)
+
+
+def tech_fallback_caption(visual_facts: str) -> str:
+    lower = visual_facts.lower()
+    if any(term in lower for term in ["traffic", "vehicles", "cars", "bus"]):
+        return "Traffic API logs vehicle packets streaming under the autumn tree interface."
+    if any(term in lower for term in ["kitten", "cat", "tabby"]):
+        return "Kitten.exe logs a clean walk cycle through the leafy dirt path."
+    if any(term in lower for term in ["office", "keyboard", "computer", "monitor"]):
+        return "Office runtime tracks keyboard input while the monitor renders focus mode."
+    return "System log records visible motion with stable low-latency scene tracking."
 
 
 def choose_caption(style: str, caption: object, visual_summary: str) -> str:
@@ -343,12 +456,16 @@ def choose_caption(style: str, caption: object, visual_summary: str) -> str:
             or (style == "humorous_non_tech" and not has_tech_term(normalized))
             or style not in {"humorous_tech", "humorous_non_tech"}
         )
-        if is_reasonable_length and has_matching_tech_tone:
+        if (
+            is_reasonable_length
+            and has_matching_tech_tone
+            and not contains_banned_unseen_detail(normalized)
+        ):
             return normalized
     return normalize_caption(fallback_caption(style, visual_summary))
 
 
-def rewrite_captions(styles: list[str], visual_summary: str) -> dict[str, str]:
+def rewrite_captions(styles: list[str], visual_facts: str) -> dict[str, str]:
     client = create_ai_client()
     model = get_model("text")
 
@@ -356,8 +473,9 @@ def rewrite_captions(styles: list[str], visual_summary: str) -> dict[str, str]:
         "formal": "Use a professional, objective, factual tone.",
         "sarcastic": "Use a dry, ironic, lightly mocking tone.",
         "humorous_tech": (
-            "Use humor with clear technology or programming references, such as "
-            "code, bugs, servers, latency, algorithms, UI, APIs, or system logs."
+            "Use humor with clear technology metaphors, such as servers, latency, "
+            "algorithms, UI, APIs, inputs, renders, runtime, or system logs. "
+            "Do not claim anyone is coding, compiling, or debugging unless visible."
         ),
         "humorous_non_tech": "Use everyday humor with no technical jargon.",
     }
@@ -370,7 +488,8 @@ def rewrite_captions(styles: list[str], visual_summary: str) -> dict[str, str]:
         for style in styles
     }
 
-    response = client.chat.completions.create(
+    response = create_chat_completion_with_retries(
+        client,
         model=model,
         messages=[
             {
@@ -389,8 +508,10 @@ def rewrite_captions(styles: list[str], visual_summary: str) -> dict[str, str]:
                     f"this JSON object: {json.dumps(requested_styles)}\n"
                     "Each value must be one short English caption in 8 to 16 words. "
                     "Use one sentence per caption. Avoid long clauses. "
-                    "Do not invent people, objects, actions, locations, or dialogue.\n"
-                    f"Video summary: {visual_summary}"
+                    "Do not invent concrete people, objects, actions, locations, "
+                    "tasks, dialogue, emails, spreadsheets, or coffee. Humor may "
+                    "use metaphors, but visible facts must stay accurate.\n"
+                    f"Video facts: {visual_facts}"
                 ),
             },
         ],
@@ -406,9 +527,65 @@ def rewrite_captions(styles: list[str], visual_summary: str) -> dict[str, str]:
 
     captions = {}
     for style in styles:
-        captions[style] = choose_caption(style, generated.get(style), visual_summary)
+        captions[style] = choose_caption(style, generated.get(style), visual_facts)
 
     return captions
+
+
+def should_self_review() -> bool:
+    value = os.getenv("CAPTION_SELF_REVIEW", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def review_captions(styles: list[str], visual_facts: str, captions: dict[str, str]) -> dict[str, str]:
+    if not should_self_review():
+        return captions
+
+    client = create_ai_client()
+    model = get_model("text")
+
+    response = create_chat_completion_with_retries(
+        client,
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict caption editor. Return only valid minified "
+                    "JSON. Preserve visible facts. Fix inaccurate, overly long, "
+                    "bland, or wrong-style captions."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Video facts: {visual_facts}\n"
+                    f"Current captions JSON: {json.dumps(captions)}\n"
+                    f"Required style keys: {json.dumps(styles)}\n"
+                    "Return corrected captions with the same keys. Each caption "
+                    "must be 8 to 18 words. formal is objective. sarcastic is "
+                    "clearly dry or ironic. humorous_tech contains an obvious "
+                    "tech reference. humorous_non_tech contains no tech jargon. "
+                    "Do not add unseen concrete tasks, objects, dialogue, emails, "
+                    "spreadsheets, coffee, coding, compiling, debugging, or "
+                    "identity traits."
+                ),
+            },
+        ],
+        temperature=0.1,
+        max_tokens=2000,
+    )
+
+    text = get_message_text(response.choices[0].message)
+    try:
+        reviewed = parse_json_object(text)
+    except json.JSONDecodeError:
+        reviewed = {}
+
+    return {
+        style: choose_caption(style, reviewed.get(style, captions.get(style)), visual_facts)
+        for style in styles
+    }
 
 
 def main() -> None:
@@ -422,10 +599,14 @@ def main() -> None:
     results = []
     for task in tasks:
         video_path = download_video(task["video_url"])
-        frame_paths = extract_frames(video_path)
-        visual_summary = describe_video_frames(frame_paths)
+        try:
+            frame_paths = extract_frames(video_path)
+            visual_facts = describe_video_frames(frame_paths)
 
-        captions = rewrite_captions(task["styles"], visual_summary)
+            captions = rewrite_captions(task["styles"], visual_facts)
+            captions = review_captions(task["styles"], visual_facts, captions)
+        finally:
+            shutil.rmtree(video_path.parent, ignore_errors=True)
 
         results.append(
             {

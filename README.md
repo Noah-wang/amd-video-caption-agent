@@ -9,11 +9,12 @@ the requested caption styles.
 
 1. Read `/input/tasks.json`.
 2. Download each `video_url`.
-3. Sample 4 evenly spaced frames with `ffmpeg`.
+3. Sample evenly spaced frames with `ffmpeg` using an adaptive frame count.
 4. Resize frames to 768px wide to reduce image-token cost.
-5. Use Fireworks `minimax-m3` for visual summarization.
+5. Use Fireworks `minimax-m3` for structured visual facts.
 6. Use Fireworks `gpt-oss-120b` to generate all requested styles in one JSON response.
-7. Write `/output/results.json`.
+7. Run a lightweight self-review pass to improve factuality, length, and tone.
+8. Write `/output/results.json`.
 
 ## Input
 
@@ -57,6 +58,9 @@ Optional:
 export AI_PROVIDER="fireworks"
 export FIREWORKS_VISION_MODEL="accounts/fireworks/models/minimax-m3"
 export FIREWORKS_TEXT_MODEL="accounts/fireworks/models/gpt-oss-120b"
+export CAPTION_SELF_REVIEW="1"
+# Optional: override adaptive frame sampling.
+# export VIDEO_FRAME_COUNT="6"
 ```
 
 ## Local Run
@@ -79,6 +83,7 @@ docker run --rm \
   -e AI_PROVIDER="fireworks" \
   -e FIREWORKS_VISION_MODEL="accounts/fireworks/models/minimax-m3" \
   -e FIREWORKS_TEXT_MODEL="accounts/fireworks/models/gpt-oss-120b" \
+  -e CAPTION_SELF_REVIEW="1" \
   -v "$(pwd)/input:/input" \
   -v "$(pwd)/output:/output" \
   amd-video-caption-agent:test
