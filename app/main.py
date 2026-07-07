@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 import urllib.request
+import math
 from pathlib import Path
 
 from openai import OpenAI
@@ -19,6 +20,8 @@ THEBESTAI_BASE_URL = "https://thebestai.net/v1"
 THEBESTAI_VISION_MODEL = "glm-4v-plus"
 THEBESTAI_TEXT_MODEL = "deepseek-v4-flash-none"
 MAX_MODEL_RETRIES = 3
+SIGNATURE_SIZE = 64 * 64
+DEFAULT_FRAME_WIDTH = 384
 TECH_TERMS = [
     "api",
     "bug",
@@ -40,10 +43,59 @@ TECH_TERMS = [
     "wifi",
     "gps",
 ]
+SARCASM_MARKERS = [
+    "wow",
+    "sure",
+    "clearly",
+    "totally",
+    "groundbreaking",
+    "thrilling",
+    "because",
+    "oh look",
+    "oh great",
+]
 BANNED_UNSEEN_PATTERNS = [
     r"\b(email|emails|coffee|spreadsheet|spreadsheets|litter box)\b",
     r"\b(compiles?|debugs?|coding|programming)\s+(code|spreadsheets?|life)\b",
 ]
+SCENE_TERM_GROUPS = {
+    "traffic": [
+        "traffic",
+        "vehicle",
+        "vehicles",
+        "car",
+        "cars",
+        "bus",
+        "buses",
+        "truck",
+        "trucks",
+        "lane",
+        "lanes",
+    ],
+    "animal": ["kitten", "cat", "tabby", "feline", "tail", "purr", "purrs"],
+    "office": [
+        "office",
+        "keyboard",
+        "monitor",
+        "desk",
+        "computer",
+        "mouse",
+        "cable",
+        "cables",
+        "typing",
+    ],
+}
+
+STYLE_INSTRUCTIONS = {
+    "formal": "Professional, objective, factual tone.",
+    "sarcastic": "Dry, ironic, lightly mocking tone.",
+    "humorous_tech": (
+        "Humor with clear technology metaphors such as servers, latency, "
+        "algorithms, UI, APIs, inputs, renders, runtime, or system logs. "
+        "Do not claim anyone is coding, compiling, or debugging unless visible."
+    ),
+    "humorous_non_tech": "Everyday humor with no technical jargon.",
+}
 
 
 def load_local_env(env_path: Path = Path(".env")) -> None:
@@ -100,27 +152,108 @@ def get_video_duration(video_path: Path) -> float:
     return float(result.stdout.strip())
 
 
+def get_float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    return float(value) if value else default
+
+
+def get_int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    return int(value) if value else default
+
+
+def get_frame_width() -> int:
+    return max(256, get_int_env("FRAME_WIDTH", DEFAULT_FRAME_WIDTH))
+
+
+def get_candidate_timestamps(duration: float) -> list[float]:
+    interval = max(0.5, get_float_env("FRAME_CANDIDATE_INTERVAL_SECONDS", 1.0))
+    max_candidates = max(1, get_int_env("MAX_CANDIDATE_FRAMES", 120))
+    timestamps = []
+    current = min(0.1, max(0.0, duration - 0.05))
+
+    while current < duration and len(timestamps) < max_candidates:
+        timestamps.append(round(current, 2))
+        current += interval
+
+    if timestamps and timestamps[-1] < duration - interval / 2:
+        timestamps.append(round(max(0.0, duration - 0.05), 2))
+
+    return timestamps or [0.0]
+
+
 def choose_frame_count(duration: float) -> int:
     configured = os.getenv("VIDEO_FRAME_COUNT")
     if configured:
         return max(1, int(configured))
     if duration < 10:
-        return 4
-    if duration < 30:
-        return 5
-    return 6
+        return 3
+    return 4
 
 
-def extract_frames(video_path: Path) -> list[Path]:
-    frames_dir = Path("samples/frames")
+def get_frame_signatures(video_path: Path, interval: float, max_candidates: int) -> list[bytes]:
+    fps = 1 / interval
+    command = [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-i",
+        str(video_path),
+        "-vf",
+        f"fps={fps:.6f},scale=64:64,format=gray",
+        "-frames:v",
+        str(max_candidates),
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "gray",
+        "pipe:1",
+    ]
+    result = subprocess.run(command, check=True, capture_output=True)
+    raw = result.stdout
+    return [
+        raw[index : index + SIGNATURE_SIZE]
+        for index in range(0, len(raw), SIGNATURE_SIZE)
+        if len(raw[index : index + SIGNATURE_SIZE]) == SIGNATURE_SIZE
+    ]
 
-    if frames_dir.exists():
-        shutil.rmtree(frames_dir)
-    frames_dir.mkdir(parents=True, exist_ok=True)
 
-    duration = get_video_duration(video_path)
-    print(f"Video duration: {duration:.2f} seconds")
+def frame_difference(previous: bytes, current: bytes) -> float:
+    return sum(abs(a - b) for a, b in zip(previous, current)) / len(current)
+
+
+def select_keyframe_indices(signatures: list[bytes], max_frames: int) -> list[int]:
+    if len(signatures) <= max_frames:
+        return list(range(len(signatures)))
+
+    anchor_count = max(2, max_frames // 2)
+    anchors = {
+        round(index * (len(signatures) - 1) / (anchor_count - 1))
+        for index in range(anchor_count)
+    }
+
+    scored_motion = [
+        (frame_difference(signatures[index - 1], signatures[index]), index)
+        for index in range(1, len(signatures))
+    ]
+    scored_motion.sort(reverse=True)
+
+    selected = set(anchors)
+    for _, index in scored_motion:
+        if len(selected) >= max_frames:
+            break
+        selected.add(index)
+
+    return sorted(selected)
+
+
+def extract_evenly_spaced_frames(
+    video_path: Path,
+    frames_dir: Path,
+    duration: float,
+) -> list[Path]:
     frame_count = choose_frame_count(duration)
+    print(f"Sampling mode: adaptive")
     print(f"Sampling frames: {frame_count}")
 
     frame_paths = []
@@ -136,7 +269,7 @@ def extract_frames(video_path: Path) -> list[Path]:
             "-i",
             str(video_path),
             "-vf",
-            "scale=768:-1",
+            f"scale={get_frame_width()}:-1",
             "-frames:v",
             "1",
             str(output_path),
@@ -148,6 +281,77 @@ def extract_frames(video_path: Path) -> list[Path]:
     print("Extracted frames:")
     for frame_path in frame_paths:
         print(f"  - {frame_path}")
+
+    return frame_paths
+
+
+def extract_frames(video_path: Path) -> list[Path]:
+    frames_dir = Path("samples/frames")
+
+    if frames_dir.exists():
+        shutil.rmtree(frames_dir)
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    duration = get_video_duration(video_path)
+    print(f"Video duration: {duration:.2f} seconds")
+    selection_mode = os.getenv("FRAME_SELECTION_MODE", "adaptive").strip().lower()
+    if selection_mode != "keyframes":
+        return extract_evenly_spaced_frames(video_path, frames_dir, duration)
+
+    print("Sampling mode: keyframes")
+    max_vision_frames = max(1, get_int_env("MAX_VISION_FRAMES", 4))
+    candidate_interval = max(
+        0.5,
+        get_float_env("FRAME_CANDIDATE_INTERVAL_SECONDS", 1.0),
+    )
+    max_candidates = max(1, get_int_env("MAX_CANDIDATE_FRAMES", 120))
+    candidate_timestamps = get_candidate_timestamps(duration)
+    signatures = get_frame_signatures(video_path, candidate_interval, max_candidates)
+
+    usable_count = min(len(candidate_timestamps), len(signatures))
+    candidate_timestamps = candidate_timestamps[:usable_count]
+    signatures = signatures[:usable_count]
+
+    if signatures:
+        selected_indices = select_keyframe_indices(signatures, max_vision_frames)
+        selected_timestamps = [candidate_timestamps[index] for index in selected_indices]
+    else:
+        fallback_count = min(max_vision_frames, 6)
+        selected_timestamps = [
+            duration * (index + 1) / (fallback_count + 1)
+            for index in range(fallback_count)
+        ]
+
+    print(
+        "Candidate frames: "
+        f"{len(candidate_timestamps)} at ~{candidate_interval:.2f}s intervals"
+    )
+    print(f"Selected keyframes: {len(selected_timestamps)}")
+
+    frame_paths = []
+    for index, timestamp in enumerate(selected_timestamps):
+        output_path = frames_dir / f"frame_{index + 1:03d}.jpg"
+
+        command = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            f"{timestamp:.2f}",
+            "-i",
+            str(video_path),
+            "-vf",
+            f"scale={get_frame_width()}:-1",
+            "-frames:v",
+            "1",
+            str(output_path),
+        ]
+
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        frame_paths.append(output_path)
+
+    print("Extracted frames:")
+    for frame_path, timestamp in zip(frame_paths, selected_timestamps):
+        print(f"  - {frame_path} @ {timestamp:.2f}s")
 
     return frame_paths
 
@@ -206,6 +410,51 @@ def encode_image_base64(image_path: Path) -> str:
     return base64.b64encode(image_path.read_bytes()).decode("utf-8")
 
 
+def should_use_contact_sheet() -> bool:
+    value = os.getenv("USE_CONTACT_SHEET", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def create_contact_sheet(frame_paths: list[Path]) -> Path:
+    if len(frame_paths) == 1:
+        return frame_paths[0]
+
+    columns = math.ceil(math.sqrt(len(frame_paths)))
+    rows = math.ceil(len(frame_paths) / columns)
+    output_path = frame_paths[0].parent / "contact_sheet.jpg"
+    input_pattern = frame_paths[0].parent / "frame_%03d.jpg"
+    command = [
+        "ffmpeg",
+        "-y",
+        "-framerate",
+        "1",
+        "-i",
+        str(input_pattern),
+        "-filter_complex",
+        f"tile={columns}x{rows}:padding=8:margin=4:color=white",
+        "-frames:v",
+        "1",
+        str(output_path),
+    ]
+    subprocess.run(command, check=True, capture_output=True, text=True)
+    print(f"Created contact sheet: {output_path}")
+    return output_path
+
+
+def build_image_content(frame_paths: list[Path]) -> list[dict]:
+    image_paths = [create_contact_sheet(frame_paths)] if should_use_contact_sheet() else frame_paths
+    content = []
+    for image_path in image_paths:
+        image_base64 = encode_image_base64(image_path)
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"},
+            }
+        )
+    return content
+
+
 def create_chat_completion_with_retries(client: OpenAI, **kwargs):
     last_error = None
     for attempt in range(1, MAX_MODEL_RETRIES + 1):
@@ -229,36 +478,92 @@ def describe_video_frames(frame_paths: list[Path]) -> str:
         {
             "type": "text",
             "text": (
-                "These are sequential frames sampled from one video, not a collage. "
+                "These are sequential frames sampled from one video. If they appear "
+                "in one contact sheet, read them left-to-right, top-to-bottom. "
                 "Describe the video scene, not the frame layout. Output only valid "
                 "minified JSON with keys summary, subjects, actions, setting, "
-                "notable_details. Use visible facts only. No analysis or markdown. "
-                "Do not infer sensitive traits such as race, ethnicity, age, "
-                "nationality, religion, or health."
+                "notable_details. Summary must be under 25 words. Each list may "
+                "contain at most 4 short phrases. Use visible facts only. No "
+                "analysis or markdown. Do not infer sensitive traits such as race, "
+                "ethnicity, age, nationality, religion, or health. Do not "
+                "transcribe sign text unless it is central and perfectly legible."
             ),
         }
     ]
 
-    for frame_path in frame_paths:
-        image_base64 = encode_image_base64(frame_path)
-        content.append(
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"},
-            }
-        )
+    content.extend(build_image_content(frame_paths))
 
     response = create_chat_completion_with_retries(
         client,
         model=model,
         messages=[{"role": "user", "content": content}],
         temperature=0.1,
-        max_tokens=2000,
+        max_tokens=900,
     )
 
     visual_facts = clean_visual_facts(get_message_text(response.choices[0].message))
     print(f"Visual facts: {visual_facts}")
     return visual_facts
+
+
+def generate_single_pass_result(
+    styles: list[str],
+    frame_paths: list[Path],
+) -> tuple[str, dict[str, str]]:
+    client = create_ai_client()
+    model = get_model("vision")
+    requested_styles = {
+        style: STYLE_INSTRUCTIONS.get(style, "Concise caption preserving visible facts.")
+        for style in styles
+    }
+
+    content = [
+        {
+            "type": "text",
+            "text": (
+                "These are sequential frames sampled from one video. If they appear "
+                "in one contact sheet, read them left-to-right, top-to-bottom. "
+                "Output only valid minified JSON with exactly two top-level keys: "
+                "visual_facts and captions. visual_facts must contain summary, "
+                "subjects, actions, setting, notable_details. Captions keys must "
+                f"match this JSON object: {json.dumps(requested_styles)}. "
+                "Each caption must be one English sentence, 8 to 18 words. "
+                "Preserve visible facts. Do not invent concrete people, objects, "
+                "actions, locations, tasks, dialogue, emails, spreadsheets, coffee, "
+                "coding, compiling, debugging, identity traits, or sign text. "
+                "humorous_tech must include an obvious tech metaphor. "
+                "humorous_non_tech must contain no tech jargon."
+            ),
+        }
+    ]
+
+    content.extend(build_image_content(frame_paths))
+
+    response = create_chat_completion_with_retries(
+        client,
+        model=model,
+        messages=[{"role": "user", "content": content}],
+        temperature=0.2,
+        max_tokens=2200,
+    )
+
+    parsed = parse_json_object(get_message_text(response.choices[0].message))
+    raw_visual_facts = parsed.get("visual_facts", parsed.get("facts", {}))
+    if isinstance(raw_visual_facts, str):
+        visual_facts = clean_visual_facts(raw_visual_facts)
+    else:
+        visual_facts = clean_visual_facts(json.dumps(raw_visual_facts))
+
+    raw_captions = parsed.get("captions")
+    if not isinstance(raw_captions, dict):
+        raw_captions = parsed
+
+    captions = {
+        style: choose_caption(style, raw_captions.get(style), visual_facts)
+        for style in styles
+    }
+    print(f"Visual facts: {visual_facts}")
+    return visual_facts, captions
 
 
 def get_message_text(message) -> str:
@@ -286,6 +591,19 @@ def compact_list(value: object, limit: int = 5) -> str:
     return ""
 
 
+def filter_unreliable_ocr(value: object) -> object:
+    blocked = ["sign reads", "text reads", "readable text", "korean text", "signage"]
+    if isinstance(value, list):
+        return [
+            item
+            for item in value
+            if not any(phrase in str(item).lower() for phrase in blocked)
+        ]
+    if isinstance(value, str) and any(phrase in value.lower() for phrase in blocked):
+        return ""
+    return value
+
+
 def remove_sensitive_descriptors(text: str) -> str:
     identity_terms = "Black|White|Asian|Latina|Latino|Hispanic"
     person_terms = "woman|man|person|girl|boy|child|teenager|adult"
@@ -304,6 +622,17 @@ def remove_sensitive_descriptors(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def remove_frame_layout_references(text: str) -> str:
+    text = re.sub(
+        r"\s+(across|in|over)\s+(one|two|three|four|five|six|\d+)\s+sequential frames",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\s+across the frames", "", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def clean_visual_facts(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
@@ -318,7 +647,7 @@ def clean_visual_facts(text: str) -> str:
     subjects = compact_list(parsed.get("subjects"))
     actions = compact_list(parsed.get("actions"))
     setting = compact_list(parsed.get("setting"))
-    details = compact_list(parsed.get("notable_details"))
+    details = compact_list(filter_unreliable_ocr(parsed.get("notable_details")))
 
     parts = []
     if summary:
@@ -333,8 +662,12 @@ def clean_visual_facts(text: str) -> str:
         parts.append(f"Notable details: {details}")
 
     if parts:
-        return remove_sensitive_descriptors(". ".join(parts))
-    return remove_sensitive_descriptors(clean_visual_summary(text))
+        return remove_frame_layout_references(
+            remove_sensitive_descriptors(". ".join(parts))
+        )
+    return remove_frame_layout_references(
+        remove_sensitive_descriptors(clean_visual_summary(text))
+    )
 
 
 def clean_visual_summary(text: str) -> str:
@@ -408,7 +741,7 @@ def normalize_caption(text: str) -> str:
     }
     for source, target in replacements.items():
         text = text.replace(source, target)
-    return re.sub(r"\s+", " ", text).strip()
+    return remove_frame_layout_references(re.sub(r"\s+", " ", text).strip())
 
 
 def word_count(text: str) -> int:
@@ -418,7 +751,7 @@ def word_count(text: str) -> int:
 def fallback_caption(style: str, visual_summary: str) -> str:
     short_summary = first_words(re.sub(r"^Summary:\s*", "", visual_summary), 18)
     if style == "sarcastic":
-        return f"Oh look, another scene of {short_summary.lower()}"
+        return sarcastic_fallback_caption(visual_summary)
     if style == "humorous_tech":
         return tech_fallback_caption(visual_summary)
     if style == "humorous_non_tech":
@@ -431,9 +764,28 @@ def has_tech_term(text: str) -> bool:
     return any(re.search(rf"\b{re.escape(term)}\b", lower) for term in TECH_TERMS)
 
 
+def has_sarcasm_marker(text: str) -> bool:
+    lower = text.lower()
+    return any(marker in lower for marker in SARCASM_MARKERS)
+
+
 def contains_banned_unseen_detail(text: str) -> bool:
     lower = text.lower()
     return any(re.search(pattern, lower) for pattern in BANNED_UNSEEN_PATTERNS)
+
+
+def contains_group_term(text: str, terms: list[str]) -> bool:
+    lower = text.lower()
+    return any(re.search(rf"\b{re.escape(term)}\b", lower) for term in terms)
+
+
+def has_scene_conflict(caption: str, visual_facts: str) -> bool:
+    for group_name, terms in SCENE_TERM_GROUPS.items():
+        caption_mentions_group = contains_group_term(caption, terms)
+        facts_mention_group = contains_group_term(visual_facts, terms)
+        if caption_mentions_group and not facts_mention_group:
+            return True
+    return False
 
 
 def tech_fallback_caption(visual_facts: str) -> str:
@@ -447,6 +799,17 @@ def tech_fallback_caption(visual_facts: str) -> str:
     return "System log records visible motion with stable low-latency scene tracking."
 
 
+def sarcastic_fallback_caption(visual_facts: str) -> str:
+    lower = visual_facts.lower()
+    if any(term in lower for term in ["traffic", "vehicles", "cars", "bus"]):
+        return "Oh great, another heroic traffic parade pretending to be urban progress."
+    if any(term in lower for term in ["kitten", "cat", "tabby"]):
+        return "Oh look, a tiny cat conquering the garden like a furry emperor."
+    if any(term in lower for term in ["office", "keyboard", "computer", "monitor"]):
+        return "Oh great, another office keyboard battle under extremely serious lighting."
+    return "Oh look, another ordinary scene bravely demanding dramatic attention."
+
+
 def choose_caption(style: str, caption: object, visual_summary: str) -> str:
     if isinstance(caption, str) and caption.strip():
         normalized = normalize_caption(caption)
@@ -456,10 +819,13 @@ def choose_caption(style: str, caption: object, visual_summary: str) -> str:
             or (style == "humorous_non_tech" and not has_tech_term(normalized))
             or style not in {"humorous_tech", "humorous_non_tech"}
         )
+        has_matching_sarcasm = style != "sarcastic" or has_sarcasm_marker(normalized)
         if (
             is_reasonable_length
             and has_matching_tech_tone
+            and has_matching_sarcasm
             and not contains_banned_unseen_detail(normalized)
+            and not has_scene_conflict(normalized, visual_summary)
         ):
             return normalized
     return normalize_caption(fallback_caption(style, visual_summary))
@@ -469,19 +835,8 @@ def rewrite_captions(styles: list[str], visual_facts: str) -> dict[str, str]:
     client = create_ai_client()
     model = get_model("text")
 
-    style_instructions = {
-        "formal": "Use a professional, objective, factual tone.",
-        "sarcastic": "Use a dry, ironic, lightly mocking tone.",
-        "humorous_tech": (
-            "Use humor with clear technology metaphors, such as servers, latency, "
-            "algorithms, UI, APIs, inputs, renders, runtime, or system logs. "
-            "Do not claim anyone is coding, compiling, or debugging unless visible."
-        ),
-        "humorous_non_tech": "Use everyday humor with no technical jargon.",
-    }
-
     requested_styles = {
-        style: style_instructions.get(
+        style: STYLE_INSTRUCTIONS.get(
             style,
             "Use a concise, factual tone while preserving the video facts.",
         )
@@ -510,13 +865,14 @@ def rewrite_captions(styles: list[str], visual_facts: str) -> dict[str, str]:
                     "Use one sentence per caption. Avoid long clauses. "
                     "Do not invent concrete people, objects, actions, locations, "
                     "tasks, dialogue, emails, spreadsheets, or coffee. Humor may "
-                    "use metaphors, but visible facts must stay accurate.\n"
+                    "use metaphors, but visible facts must stay accurate. Do not "
+                    "mention sign text from the video.\n"
                     f"Video facts: {visual_facts}"
                 ),
             },
         ],
         temperature=0.2,
-        max_tokens=2000,
+        max_tokens=900,
     )
 
     text = get_message_text(response.choices[0].message)
@@ -533,8 +889,12 @@ def rewrite_captions(styles: list[str], visual_facts: str) -> dict[str, str]:
 
 
 def should_self_review() -> bool:
-    value = os.getenv("CAPTION_SELF_REVIEW", "1").strip().lower()
+    value = os.getenv("CAPTION_SELF_REVIEW", "0").strip().lower()
     return value not in {"0", "false", "no", "off"}
+
+
+def get_pipeline_mode() -> str:
+    return os.getenv("PIPELINE_MODE", "single_pass").strip().lower()
 
 
 def review_captions(styles: list[str], visual_facts: str, captions: dict[str, str]) -> dict[str, str]:
@@ -568,12 +928,13 @@ def review_captions(styles: list[str], visual_facts: str, captions: dict[str, st
                     "tech reference. humorous_non_tech contains no tech jargon. "
                     "Do not add unseen concrete tasks, objects, dialogue, emails, "
                     "spreadsheets, coffee, coding, compiling, debugging, or "
-                    "identity traits."
+                    "identity traits. Do not carry details from another video. "
+                    "Do not mention sign text from the video."
                 ),
             },
         ],
         temperature=0.1,
-        max_tokens=2000,
+        max_tokens=900,
     )
 
     text = get_message_text(response.choices[0].message)
@@ -601,9 +962,19 @@ def main() -> None:
         video_path = download_video(task["video_url"])
         try:
             frame_paths = extract_frames(video_path)
-            visual_facts = describe_video_frames(frame_paths)
-
-            captions = rewrite_captions(task["styles"], visual_facts)
+            if get_pipeline_mode() == "two_stage":
+                visual_facts = describe_video_frames(frame_paths)
+                captions = rewrite_captions(task["styles"], visual_facts)
+            else:
+                try:
+                    visual_facts, captions = generate_single_pass_result(
+                        task["styles"],
+                        frame_paths,
+                    )
+                except Exception as error:
+                    print(f"Single-pass generation failed, falling back: {error}")
+                    visual_facts = describe_video_frames(frame_paths)
+                    captions = rewrite_captions(task["styles"], visual_facts)
             captions = review_captions(task["styles"], visual_facts, captions)
         finally:
             shutil.rmtree(video_path.parent, ignore_errors=True)

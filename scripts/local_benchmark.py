@@ -116,7 +116,13 @@ def run_container(image: str, input_dir: Path, output_dir: Path, timeout: int) -
         "THEBESTAI_BASE_URL",
         "THEBESTAI_VISION_MODEL",
         "THEBESTAI_TEXT_MODEL",
-        "VIDEO_FRAME_COUNT",
+        "PIPELINE_MODE",
+        "FRAME_WIDTH",
+        "USE_CONTACT_SHEET",
+        "FRAME_SELECTION_MODE",
+        "FRAME_CANDIDATE_INTERVAL_SECONDS",
+        "MAX_CANDIDATE_FRAMES",
+        "MAX_VISION_FRAMES",
         "CAPTION_SELF_REVIEW",
     ]:
         value = os.getenv(name)

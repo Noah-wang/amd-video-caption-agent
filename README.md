@@ -9,11 +9,11 @@ the requested caption styles.
 
 1. Read `/input/tasks.json`.
 2. Download each `video_url`.
-3. Sample evenly spaced frames with `ffmpeg` using an adaptive frame count.
-4. Resize frames to 768px wide to reduce image-token cost.
-5. Use Fireworks `minimax-m3` for structured visual facts.
-6. Use Fireworks `gpt-oss-120b` to generate all requested styles in one JSON response.
-7. Run a lightweight self-review pass to improve factuality, length, and tone.
+3. Sample evenly spaced frames with `ffmpeg` by default.
+4. Optionally enable keyframe mode to sample candidates every second and select representative frames.
+5. Resize selected frames to 384px wide and tile them into one contact sheet.
+6. Use Fireworks `minimax-m3` in single-pass mode to produce visual facts and captions.
+7. Optionally use a slower two-stage or self-review mode for local experiments.
 8. Write `/output/results.json`.
 
 ## Input
@@ -58,10 +58,25 @@ Optional:
 export AI_PROVIDER="fireworks"
 export FIREWORKS_VISION_MODEL="accounts/fireworks/models/minimax-m3"
 export FIREWORKS_TEXT_MODEL="accounts/fireworks/models/gpt-oss-120b"
-export CAPTION_SELF_REVIEW="1"
-# Optional: override adaptive frame sampling.
-# export VIDEO_FRAME_COUNT="6"
+export PIPELINE_MODE="single_pass"
+export CAPTION_SELF_REVIEW="0"
+export FRAME_WIDTH="384"
+export USE_CONTACT_SHEET="1"
+# Optional: adaptive is fastest; keyframes samples candidates every second.
+# export FRAME_SELECTION_MODE="adaptive"
+# export FRAME_CANDIDATE_INTERVAL_SECONDS="1"
+# export MAX_CANDIDATE_FRAMES="120"
+# export MAX_VISION_FRAMES="4"
 ```
+
+`FRAME_SELECTION_MODE=adaptive` is the safer default for the 10-minute judging limit.
+For local experiments, `FRAME_SELECTION_MODE=keyframes` with `MAX_VISION_FRAMES=4`
+can improve temporal coverage but may be too slow.
+`PIPELINE_MODE=single_pass` uses one multimodal call per clip. `two_stage` is often
+more structured but roughly doubles model calls.
+`FRAME_WIDTH=384` is the faster submission default; `512` or `768` is sharper but slower.
+`USE_CONTACT_SHEET=1` sends one tiled image instead of several image inputs, which is much faster.
+`CAPTION_SELF_REVIEW=1` can improve tone, but it adds one extra text-model call per clip.
 
 ## Local Run
 
@@ -83,7 +98,13 @@ docker run --rm \
   -e AI_PROVIDER="fireworks" \
   -e FIREWORKS_VISION_MODEL="accounts/fireworks/models/minimax-m3" \
   -e FIREWORKS_TEXT_MODEL="accounts/fireworks/models/gpt-oss-120b" \
-  -e CAPTION_SELF_REVIEW="1" \
+  -e PIPELINE_MODE="single_pass" \
+  -e CAPTION_SELF_REVIEW="0" \
+  -e FRAME_WIDTH="384" \
+  -e USE_CONTACT_SHEET="1" \
+  -e FRAME_SELECTION_MODE="adaptive" \
+  -e FRAME_CANDIDATE_INTERVAL_SECONDS="1" \
+  -e MAX_VISION_FRAMES="4" \
   -v "$(pwd)/input:/input" \
   -v "$(pwd)/output:/output" \
   amd-video-caption-agent:test
