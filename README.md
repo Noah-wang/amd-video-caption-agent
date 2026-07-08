@@ -90,6 +90,25 @@ cat output/results.json
 
 ## Docker Run
 
+Fastest local run after cloning:
+
+```bash
+cp .env.example .env
+# Edit .env and set FIREWORKS_API_KEY.
+bash scripts/run_docker.sh
+cat output/results.json
+```
+
+The repository and Docker image intentionally do not contain an API key. Keep
+your key in local `.env`, Vercel environment variables, GitHub Actions secrets,
+or the judging platform's secret manager.
+
+If your Docker installation includes Compose, this equivalent command also works:
+
+```bash
+docker compose up
+```
+
 ```bash
 docker build --platform linux/amd64 -t amd-video-caption-agent:test .
 docker run --rm \

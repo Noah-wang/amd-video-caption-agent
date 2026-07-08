@@ -1,0 +1,19 @@
+services:
+  caption-agent:
+    image: ghcr.io/noah-wang/amd-video-caption-agent:latest
+    platform: linux/amd64
+    env_file:
+      - .env
+    environment:
+      AI_PROVIDER: ${AI_PROVIDER:-fireworks}
+      FIREWORKS_VISION_MODEL: ${FIREWORKS_VISION_MODEL:-accounts/fireworks/models/minimax-m3}
+      FIREWORKS_TEXT_MODEL: ${FIREWORKS_TEXT_MODEL:-accounts/fireworks/models/gpt-oss-120b}
+      PIPELINE_MODE: ${PIPELINE_MODE:-single_pass}
+      CAPTION_SELF_REVIEW: ${CAPTION_SELF_REVIEW:-0}
+      FRAME_WIDTH: ${FRAME_WIDTH:-384}
+      USE_CONTACT_SHEET: ${USE_CONTACT_SHEET:-1}
+      FRAME_SELECTION_MODE: ${FRAME_SELECTION_MODE:-adaptive}
+      MAX_VISION_FRAMES: ${MAX_VISION_FRAMES:-4}
+    volumes:
+      - ./input:/input
+      - ./output:/output
