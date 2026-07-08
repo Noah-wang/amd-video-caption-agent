@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="StyleFrame Caption Agent: a containerized multimodal agent for AMD Hackathon Track 2 video captioning."
+    />
+    <title>StyleFrame Caption Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700;9..144,900&family=IBM+Plex+Mono:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="grain"></div>
+    <main>
+      <section class="hero">
+        <nav class="nav" aria-label="Project links">
+          <a href="https://github.com/Noah-wang/amd-video-caption-agent" target="_blank" rel="noreferrer">GitHub</a>
+          <a href="#output">Sample Output</a>
+          <a href="#run">Run Container</a>
+        </nav>
+
+        <div class="hero-grid">
+          <div class="hero-copy reveal">
+            <p class="eyebrow">AMD Hackathon · Track 2 · Video Captioning</p>
+            <h1>StyleFrame turns video clips into captions with four distinct voices.</h1>
+            <p class="lede">
+              A linux/amd64 Docker agent that samples video frames, compresses temporal context into
+              a contact sheet, asks a Fireworks multimodal model for grounded visual facts, and writes
+              the required caption JSON.
+            </p>
+            <div class="hero-actions">
+              <a class="button primary" href="#run">Copy Docker image</a>
+              <a class="button secondary" href="#architecture">See pipeline</a>
+            </div>
+          </div>
+
+          <div class="visual-card reveal delay-1" aria-label="Stylized video frame timeline">
+            <div class="timeline">
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <div class="caption-machine">
+              <div class="frame-strip">
+                <div>t+01</div>
+                <div>t+18</div>
+                <div>t+36</div>
+                <div>t+54</div>
+              </div>
+              <div class="machine-core">
+                <p>CONTACT SHEET</p>
+                <strong>→</strong>
+                <p>MINIMAX-M3</p>
+                <strong>→</strong>
+                <p>CAPTIONS</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="stats reveal delay-2" aria-label="Submission readiness">
+        <article>
+          <span>4</span>
+          <p>caption styles per clip</p>
+        </article>
+        <article>
+          <span>49.5s</span>
+          <p>local benchmark on 3 clips</p>
+        </article>
+        <article>
+          <span>4.35/5</span>
+          <p>local LLM-style judge score</p>
+        </article>
+        <article>
+          <span>amd64</span>
+          <p>container-ready image</p>
+        </article>
+      </section>
+
+      <section id="architecture" class="section architecture">
+        <div class="section-heading reveal">
+          <p class="eyebrow">Architecture</p>
+          <h2>The agent treats a video as a compact visual timeline.</h2>
+        </div>
+        <div class="pipe reveal delay-1">
+          <div><strong>tasks.json</strong><span>read input</span></div>
+          <div><strong>FFmpeg</strong><span>sample frames</span></div>
+          <div><strong>Contact Sheet</strong><span>compress context</span></div>
+          <div><strong>Fireworks</strong><span>vision reasoning</span></div>
+          <div><strong>Guardrails</strong><span>style + JSON checks</span></div>
+          <div><strong>results.json</strong><span>write output</span></div>
+        </div>
+      </section>
+
+      <section id="output" class="section output-grid">
+        <div class="sample-panel reveal">
+          <p class="eyebrow">Sample clip</p>
+          <h2>One scene, four tones.</h2>
+          <p>
+            The UI below is a front-end demo of the public sample output. Hidden evaluation still runs
+            the Docker image directly with mounted input and output folders.
+          </p>
+          <div class="style-tabs" role="tablist" aria-label="Caption styles">
+            <button class="active" data-style="formal">Formal</button>
+            <button data-style="sarcastic">Sarcastic</button>
+            <button data-style="humorous_tech">Humorous Tech</button>
+            <button data-style="humorous_non_tech">Humorous Non-Tech</button>
+          </div>
+        </div>
+        <div class="caption-card reveal delay-1">
+          <div class="caption-topline">
+            <span id="styleLabel">formal</span>
+            <span>task_id: v1</span>
+          </div>
+          <p id="captionText">
+            A busy urban street with two-way traffic and autumn trees under daytime lighting.
+          </p>
+          <div class="facts">
+            <span>urban street</span>
+            <span>autumn foliage</span>
+            <span>moving traffic</span>
+            <span>daylight</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section quality">
+        <div class="section-heading reveal">
+          <p class="eyebrow">Quality controls</p>
+          <h2>Small guardrails make the captions more judge-friendly.</h2>
+        </div>
+        <div class="quality-grid reveal delay-1">
+          <article>
+            <h3>Grounding first</h3>
+            <p>Frames become visual facts before style generation, reducing captions that drift away from the scene.</p>
+          </article>
+          <article>
+            <h3>Style separation</h3>
+            <p>Tech humor must contain technical language; non-tech humor is kept plain and everyday.</p>
+          </article>
+          <article>
+            <h3>Runtime aware</h3>
+            <p>Contact sheets keep multimodal calls compact enough for the 10-minute hidden evaluation limit.</p>
+          </article>
+          <article>
+            <h3>Schema safe</h3>
+            <p>Output is normalized into the required JSON shape so missing styles do not silently break scoring.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="run" class="section run-card reveal">
+        <div>
+          <p class="eyebrow">Submission image</p>
+          <h2>Run the same container used for evaluation.</h2>
+        </div>
+        <button id="copyImage" class="copy-button" type="button">Copy image</button>
+        <pre><code id="imageRef">ghcr.io/noah-wang/amd-video-caption-agent:latest</code></pre>
+        <pre><code>docker run --rm --platform linux/amd64 \
+  -e FIREWORKS_API_KEY="$FIREWORKS_API_KEY" \
+  -v "$(pwd)/input:/input" \
+  -v "$(pwd)/output:/output" \
+  ghcr.io/noah-wang/amd-video-caption-agent:latest</code></pre>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
