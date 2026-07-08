@@ -22,6 +22,7 @@
       <section class="hero">
         <nav class="nav" aria-label="Project links">
           <a href="https://github.com/Noah-wang/amd-video-caption-agent" target="_blank" rel="noreferrer">GitHub</a>
+          <a href="#live">Live Demo</a>
           <a href="#output">Sample Output</a>
           <a href="#run">Run Container</a>
         </nav>
@@ -98,6 +99,64 @@
           <div><strong>Fireworks</strong><span>vision reasoning</span></div>
           <div><strong>Guardrails</strong><span>style + JSON checks</span></div>
           <div><strong>results.json</strong><span>write output</span></div>
+        </div>
+      </section>
+
+      <section id="live" class="section live-demo">
+        <div class="section-heading reveal">
+          <p class="eyebrow">Live demo</p>
+          <h2>Paste a video URL and generate captions online.</h2>
+          <p>
+            The browser samples frames into a contact sheet, then Vercel securely calls Fireworks
+            from a server-side API route. Your API key never enters the browser.
+          </p>
+        </div>
+
+        <div class="demo-console reveal delay-1">
+          <form id="demoForm" class="demo-form">
+            <label for="videoUrl">Video URL</label>
+            <div class="input-row">
+              <input
+                id="videoUrl"
+                name="videoUrl"
+                type="url"
+                value="https://storage.googleapis.com/amd-hackathon-clips/1860079-uhd_2560_1440_25fps.mp4"
+                placeholder="https://example.com/video.mp4"
+                required
+              />
+              <button id="generateButton" class="button primary" type="submit">Generate</button>
+            </div>
+            <p class="hint">
+              Works best with CORS-enabled MP4 URLs. The official public sample above is ready to try.
+            </p>
+          </form>
+
+          <div class="demo-status" id="demoStatus">Ready. Paste a video URL and press Generate.</div>
+          <img id="contactPreview" class="contact-preview" alt="Generated contact sheet preview" hidden />
+
+          <div class="generated-grid" id="generatedGrid" hidden>
+            <article>
+              <span>formal</span>
+              <p id="liveFormal"></p>
+            </article>
+            <article>
+              <span>sarcastic</span>
+              <p id="liveSarcastic"></p>
+            </article>
+            <article>
+              <span>humorous_tech</span>
+              <p id="liveTech"></p>
+            </article>
+            <article>
+              <span>humorous_non_tech</span>
+              <p id="liveNonTech"></p>
+            </article>
+          </div>
+
+          <details class="facts-box" id="factsBox" hidden>
+            <summary>Visual facts</summary>
+            <p id="liveFacts"></p>
+          </details>
         </div>
       </section>
 

@@ -9,6 +9,7 @@
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
+    "openai": "^6.9.1",
     "vite": "^7.1.7"
   },
   "devDependencies": {}
